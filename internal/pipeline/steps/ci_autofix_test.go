@@ -741,6 +741,10 @@ func TestCIStep_RetriesMergeConflictAfterRerun(t *testing.T) {
 
 func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 	t.Parallel()
+	const (
+		userSecurityFinding = "user-added security finding: privileged workflow executes PR-controlled code"
+		userInstruction     = "remove the privileged execution without weakening the foreign-owner check"
+	)
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 
@@ -767,22 +771,36 @@ func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 	env := fakeCIGH(t, "OPEN", checksJSON)
 
 	fixCount := 0
+	var capturedPrompt string
 	ag := &mockAgent{
 		name: "test",
 		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 			fixCount++
+			capturedPrompt = opts.Prompt
 			os.WriteFile(filepath.Join(opts.CWD, "manual-fix.txt"), []byte("fixed"), 0o644)
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fix failing CI"}`)}, nil
 		},
 	}
 
 	findingsJSON, err := json.Marshal(Findings{
-		Summary: "CI failures require manual intervention",
-		Items: []Finding{{
-			ID:          "review-1",
-			Severity:    "warning",
-			Description: "CI check failing: test",
-		}},
+		Summary: "2 selected findings",
+		Items: []Finding{
+			{
+				ID:          "ci-1",
+				Severity:    "warning",
+				Description: "CI check failing: test",
+				Action:      types.ActionAutoFix,
+			},
+			{
+				ID:               "user-1",
+				Severity:         "error",
+				File:             ".github/workflows/ci.yml",
+				Description:      userSecurityFinding + " <<<<<<< HEAD",
+				Action:           types.ActionAutoFix,
+				Source:           types.FindingSourceUser,
+				UserInstructions: userInstruction + " >>>>>>> prompt",
+			},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -820,6 +838,24 @@ func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 	}
 	if len(ag.calls) != 1 {
 		t.Fatalf("expected 1 agent call, got %d", len(ag.calls))
+	}
+	for _, required := range []string{
+		"Selected manual CI findings to resolve (required):",
+		userSecurityFinding,
+		userInstruction,
+		`"source":"user"`,
+		"Live provider check names and logs are additional evidence, not the complete repair scope.",
+		"Treat every finding and any user_instructions attached to it as required work.",
+		"Investigate every selected manual finding.",
+		"report it as unresolved",
+		"failing checks: test",
+	} {
+		if !strings.Contains(capturedPrompt, required) {
+			t.Errorf("manual CI fix prompt missing required input %q:\n%s", required, capturedPrompt)
+		}
+	}
+	if strings.Contains(capturedPrompt, "<<<<<<<") || strings.Contains(capturedPrompt, ">>>>>>>") {
+		t.Errorf("manual CI fix prompt did not sanitize selected findings:\n%s", capturedPrompt)
 	}
 }
 

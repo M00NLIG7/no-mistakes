@@ -120,6 +120,18 @@ CI logs:
 	if reviewCommentsSection != "" {
 		prompt += reviewCommentsSection
 	}
+	if sctx.Fixing && strings.TrimSpace(sctx.PreviousFindings) != "" {
+		prompt += fmt.Sprintf(`
+
+Selected manual CI findings to resolve (required):
+%s
+
+Manual CI repair rules:
+- Live provider check names and logs are additional evidence, not the complete repair scope.
+- Treat every finding and any user_instructions attached to it as required work.
+- Investigate every selected manual finding.
+- If a selected manual finding cannot be resolved, report it as unresolved; do not silently replace it with another provider check.`, sanitizedPreviousFindingsForPrompt(sctx.PreviousFindings))
+	}
 	prompt += userIntentPromptSection(sctx)
 	prompt += executionContextPromptSection(sctx.WorkDir)
 	prompt = testguidance.LateRepairPrompt(string(s.Name()), prompt)
